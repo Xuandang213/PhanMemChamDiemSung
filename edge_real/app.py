@@ -18,10 +18,12 @@ from storage import Store,utc,atomic_json,LOCAL_TZ
 from template_geometry import load_or_extract
 from picker import Picker
 from management import Management
+from shooter_queue import ShooterQueue
+from shooter_queue import ShooterQueue
 from image_viewer import Inspection
 ROOT=Path(__file__).resolve().parents[1]
 
-class App(Management,tk.Tk):
+class App(ShooterQueue,Management,tk.Tk):
     def __init__(self):
         super().__init__();self.title('Chấm điểm bia — Tự động v2 / CPU');self.geometry(f'1150x{min(850,self.winfo_screenheight()-90)}');self.minsize(900,620)
         self.template_path=ROOT/'assets/Biaso4.png';self.template=read_image(self.template_path);self.config_path=ROOT/'target_config.json';self.config=None;self.default_config=None
@@ -30,7 +32,10 @@ class App(Management,tk.Tk):
         self.expected_revision=None;self.inspector=None;self.recovery_offered=False
         self.vars={};self.identity_entries=[];self.photos=[]
         style=ttk.Style();style.configure('Title.TLabel',font=('Segoe UI',17,'bold'));style.configure('TButton',padding=6)
-        ttk.Label(self,text='Chấm điểm tự động từ hai ảnh',style='Title.TLabel').pack(anchor='w',padx=16,pady=(12,3))
+        top_bar=ttk.Frame(self);top_bar.pack(fill='x',padx=16,pady=(12,3))
+        ttk.Label(top_bar,text='Chấm điểm tự động từ hai ảnh',style='Title.TLabel').pack(side='left')
+        self.queue_header=tk.StringVar(value='CHƯA CHỌN NGƯỜI BẮN')
+        ttk.Label(top_bar,textvariable=self.queue_header,font=('Segoe UI',11,'bold'),foreground='#166534').pack(side='right',padx=8)
         self.notebook=ttk.Notebook(self);self.notebook.pack(fill='both',expand=True,padx=12,pady=8)
         main_tab=ttk.Frame(self.notebook);advanced=ttk.Frame(self.notebook);self.notebook.add(main_tab,text='Loạt bắn');self.notebook.add(advanced,text='Thiết lập & kiểm tra')
         scroll=tk.Canvas(main_tab,highlightthickness=0);sb=ttk.Scrollbar(main_tab,orient='vertical',command=scroll.yview);scroll.configure(yscrollcommand=sb.set)
@@ -46,8 +51,9 @@ class App(Management,tk.Tk):
         for col,(key,label,default,width) in enumerate([('shooting_date','Ngày bắn (YYYY-MM-DD)',datetime.now(LOCAL_TZ).date().isoformat(),22),('notes','Ghi chú','',45)]):
             ttk.Label(form,text=label).grid(row=2,column=col*2,columnspan=2,sticky='w',padx=5,pady=(5,0));v=tk.StringVar(value=default);self.vars[key]=v
             e=ttk.Entry(form,textvariable=v,width=width);e.grid(row=3,column=col*2,columnspan=2,sticky='w',padx=5,pady=4);self.identity_entries.append(e)
+        self.build_queue_panel(main)
         bar=ttk.Frame(main);bar.pack(fill='x')
-        for name,cmd in [('Mở / đóng camera',self.camera),('1. Chụp TRƯỚC',lambda:self.capture('before')),('2. Chụp SAU & tính điểm',lambda:self.capture('after')),('Loạt tiếp theo',self.reset),('Người tiếp theo',lambda:self.reset(new_shooter=True))]:self.button(bar,name,cmd).pack(side='left',padx=4)
+        for name,cmd in [('Mở / đóng camera',self.camera),('1. Chụp TRƯỚC',lambda:self.capture('before')),('2. Chụp SAU & tính điểm',lambda:self.capture('after')),('Loạt tiếp theo',self.reset),('Người tiếp theo',self.queue_next_or_reset)]:self.button(bar,name,cmd).pack(side='left',padx=4)
         files=ttk.Frame(main);files.pack(fill='x',pady=5)
         for name,cmd in [('Mở ảnh trước',lambda:self.load('before')),('Mở ảnh sau & tính điểm',lambda:self.load('after')),('Thử hai ảnh đã gửi',self.demo),('Tính lại / thử lại',self.run_analysis),('Kiểm tra ảnh phóng to',self.open_inspection)]:self.button(files,name,cmd).pack(side='left',padx=4)
         ttk.Label(main,text='Ảnh được lưu ngay. Khi nhận ảnh sau, hệ thống tự căn chỉnh → YOLO → đối chiếu → tính điểm → lưu.').pack(anchor='w',padx=5,pady=5)
@@ -73,6 +79,8 @@ class App(Management,tk.Tk):
         ttk.Label(tools,text='Chọn dòng ở tab Loạt bắn rồi sửa tại đây.\nNhấn Escape trong bảng để bỏ chọn trước khi thêm lỗ.\nLỗ trúng chồng hoàn toàn không thể đếm chắc chắn từ hai ảnh.',wraplength=460).grid(row=0,column=1,rowspan=5,padx=15)
         self.status=tk.StringVar(value='Đang tìm đường bao và các vòng điểm…');ttk.Label(self,textvariable=self.status,wraplength=1100).pack(fill='x',padx=16,pady=(0,10))
         self.build_management()
+        self.queue_restore()
+        self.queue_restore()
         self.after(100,self.poll);self.protocol('WM_DELETE_WINDOW',self.close)
         self.task(lambda:load_or_extract(ROOT/'assets/Biaso4.png',self.config_path),self.geometry_done,'Đang nhận dạng bia mẫu…')
     def button(self,parent,label,func):return ttk.Button(parent,text=label,command=lambda:self.guard(func))
@@ -143,7 +151,7 @@ class App(Management,tk.Tk):
         if self.saved:raise ValueError('Loạt đã lưu; bấm Loạt tiếp theo hoặc Người tiếp theo để chụp tiếp. Muốn sửa, dùng tab Thiết lập.')
         if kind=='before':
             if self.before_image is not None:raise ValueError('Đã có ảnh trước. Bấm Loạt tiếp theo nếu muốn bắt đầu lại.')
-            self.meta=self.read_meta();self.meta['capture_sources']={'before':source};self.meta['before_acquired_at']=utc();self.round_id=str(uuid.uuid4())
+            self.meta=self.read_meta();self.queue_check_before(source);self.meta['capture_sources']={'before':source};self.meta['before_acquired_at']=utc();self.round_id=str(uuid.uuid4())
             self.meta['_template_sha256']=sha(self.template_path);self.meta['_draft_config']=copy.deepcopy(self.config)
             self.before_image=im.copy()
             for e in self.identity_entries:e.configure(state='disabled')
@@ -181,7 +189,7 @@ class App(Management,tk.Tk):
             return r
         self.task(work,self.analysis_done,'Đang căn chỉnh hai ảnh, nhận diện YOLO và tính điểm trên mẫu…')
     def analysis_done(self,result):
-        self.meta.pop('reviewed_at',None);self.result=result;self.persist();self.refresh()
+        self.meta.pop('reviewed_at',None);self.result=result;self.persist();self.refresh();self.queue_on_scored();self.queue_on_scored()
     def persist(self):
         self.meta['processed_at']=utc()
         folder,payload=self.store.save(self.result,self.meta,self.before_image,self.after_image,overlay(self.template,self.config,self.result['detections']),self.round_id,expected_revision=self.expected_revision)
