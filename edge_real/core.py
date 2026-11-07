@@ -5,6 +5,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from scipy.optimize import linear_sum_assignment
+from score_map import get_map, pixel_score, near_boundary
 
 
 def read_image(path):
@@ -26,6 +27,8 @@ def sha(path):
 
 
 def validate_config(c):
+    if 'score_map' in c:
+        get_map(c)
     pts = np.asarray(c['outline'], np.float32)
     if pts.ndim != 2 or pts.shape[1] != 2 or len(pts) < 3 or not np.isfinite(pts).all():
         raise ValueError('Đường bao cần ít nhất 3 điểm hợp lệ')
@@ -42,6 +45,8 @@ def validate_config(c):
 
 
 def score_point(point, c):
+    if 'score_map' in c:
+        return pixel_score(point, get_map(c))
     x,y = map(float, point)
     if not np.isfinite([x,y]).all():
         raise ValueError('Tọa độ không hợp lệ')
@@ -53,6 +58,15 @@ def score_point(point, c):
         if d <= c['radii'][str(s)] + 1e-7:
             return s
     return 5
+
+
+def rescore_result(result):
+    """Refresh every point and totals from the round's saved scoring map."""
+    validate_config(result['config'])
+    for hole in result['detections']:
+        hole['score']=score_point(hole['template_point'],result['config'])
+    result['total_score']=sum(h['score'] for h in result['detections'] if h['selected'])
+    result['total_holes']=sum(bool(h['selected']) for h in result['detections'])
 
 
 def transform(points, H):
@@ -135,6 +149,9 @@ def analyze(before,after,template,config,detector,confidence=.25,radius=12,pairs
     hb,qb=align(before,template,None if pairs is None else pairs[0])
     ha,qa=align(after,template,None if pairs is None else pairs[1])
     height,width=template.shape[:2]
+    labels=get_map(config) if 'score_map' in config else None
+    if labels is not None and labels.shape != (height,width):
+        raise ValueError('Bản đồ điểm phải cùng kích thước ảnh mẫu')
     aligned=[];valid=[]
     for im,H in [(before,hb),(after,ha)]:
         aligned.append(cv2.warpPerspective(im,H,(width,height),flags=cv2.INTER_LINEAR))
@@ -143,6 +160,7 @@ def analyze(before,after,template,config,detector,confidence=.25,radius=12,pairs
     target_mask=np.zeros((height,width),np.uint8)
     cv2.fillPoly(target_mask,[np.array(config['outline'],np.int32)],255)
     required=target_mask>0
+    if labels is not None:required=labels>0
     for m in valid:
         if np.mean(m[required]>0)<.985:
             raise ValueError('Camera không bao phủ đủ hình người. Chụp lại toàn bộ bia.')
@@ -164,7 +182,8 @@ def analyze(before,after,template,config,detector,confidence=.25,radius=12,pairs
             if min(x,y,width-1-x,height-1-y)<12:issues.append('Sát mép ảnh; có thể là vết rách')
             d=float(np.linalg.norm(np.array(point)-config['center']))
             edge=abs(cv2.pointPolygonTest(np.array(config['outline'],np.float32),(float(x),float(y)),True))
-            if edge<=tol or (h['score']>0 and min(abs(d-r) for r in config['radii'].values())<=tol):issues.append('Gần ranh giới điểm')
+            boundary=near_boundary(point,labels,tol) if labels is not None else (edge<=tol or (h['score']>0 and min(abs(d-r) for r in config['radii'].values())<=tol))
+            if boundary:issues.append('Gần ranh giới điểm')
             if op and min(np.linalg.norm(np.array(point)-p) for p in op)<=radius*1.8:issues.append('Gần lỗ cũ; cần kiểm tra ghép lỗ')
         h['issues']=issues
         if issues:warnings.append(f'Lỗ {i+1}: '+ '; '.join(issues))
@@ -190,6 +209,12 @@ def overlay(template,config,holes=()):
     out[mask>0]=rings[mask>0]
     cv2.polylines(out,[np.array(config['outline'],np.int32)],True,(255,160,0),2)
     cv2.drawMarker(out,center,(0,0,255))
+    if 'score_map' in config:
+        out=template.copy()
+        labels=get_map(config)
+        for value in range(5,11):
+            contours,_=cv2.findContours((labels>=value).astype(np.uint8),cv2.RETR_LIST,cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(out,contours,-1,(0,210,255) if value>5 else (255,160,0),1)
     for i,h in enumerate(holes):
         p=tuple(round(v) for v in h['template_point']); color=(0,200,0) if h['selected'] else (100,100,255)
         cv2.circle(out,p,7,color,2);cv2.putText(out,f"{i+1}:{h['score']}",(p[0]+8,p[1]),cv2.FONT_HERSHEY_SIMPLEX,.5,color,1)

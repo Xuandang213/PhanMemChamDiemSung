@@ -6,6 +6,7 @@ from pathlib import Path
 from tkinter import ttk,filedialog,messagebox
 from core import sha
 from storage import shooting_day
+from window_layout import center_window
 from reports import STATES,export_xlsx,print_report,import_roster,roster_template
 
 
@@ -21,8 +22,10 @@ def table(parent,columns,height=12):
 
 class Management:
     def build_management(self):
-        self.history_tab=ttk.Frame(self.notebook);self.roster_tab=ttk.Frame(self.notebook)
-        self.notebook.add(self.history_tab,text='Lịch sử & báo cáo');self.notebook.add(self.roster_tab,text='Danh sách người bắn')
+        self.history_tab=ttk.Frame(self.notebook)
+        self.notebook.add(self.history_tab,text='Lịch sử & báo cáo')
+        self.roster_window=tk.Toplevel(self);self.roster_window.withdraw();self.roster_window.title('Danh sách người bắn');self.roster_window.geometry('860x540');self.roster_window.protocol('WM_DELETE_WINDOW',self.roster_window.withdraw)
+        self.roster_tab=ttk.Frame(self.roster_window);self.roster_tab.pack(fill='both',expand=True);self.roster_detail=None
         filters=ttk.Frame(self.history_tab);filters.pack(fill='x',padx=8,pady=8);self.filters={}
         for i,(key,label,width) in enumerate([('query','Mã / tên / đơn vị',25),('day_from','Từ ngày YYYY-MM-DD',15),('day_to','Đến ngày YYYY-MM-DD',15),('lane','Bệ bắn',8)]):
             ttk.Label(filters,text=label).grid(row=0,column=i,padx=5,sticky='w');v=tk.StringVar();self.filters[key]=v
@@ -40,14 +43,34 @@ class Management:
         ttk.Label(search,text='Tìm mã / tên / đơn vị').pack(side='left');entry=ttk.Entry(search,textvariable=self.roster_query,width=35);entry.pack(side='left',padx=8);entry.bind('<Return>',lambda e:self.guard(self.refresh_roster))
         self.button(search,'Tìm / làm mới',self.refresh_roster).pack(side='left')
         self.roster_table=table(self.roster_tab,[('code','Mã người bắn',150),('name','Họ tên',280),('unit','Đơn vị',260)],8)
-        self.roster_table.bind('<<TreeviewSelect>>',self.roster_selected);self.roster_table.bind('<Double-1>',lambda e:self.guard(self.choose_shooter))
-        form=ttk.Frame(self.roster_tab);form.pack(fill='x',padx=8,pady=6);self.roster_fields={}
-        for i,(key,label) in enumerate([('code','Mã người bắn'),('name','Họ tên'),('unit','Đơn vị')]):
-            ttk.Label(form,text=label).grid(row=0,column=i,sticky='w',padx=5);v=tk.StringVar();self.roster_fields[key]=v;ttk.Entry(form,textvariable=v,width=28).grid(row=1,column=i,padx=5)
+        self.roster_table.bind('<<TreeviewSelect>>',self.roster_selected);self.roster_table.bind('<Double-1>',lambda e:self.guard(self.open_shooter_detail))
+        self.roster_fields={key:tk.StringVar() for key in ('code','name','unit')}
         bar=ttk.Frame(self.roster_tab);bar.pack(fill='x',padx=8,pady=6)
-        for label,cmd in [('Thêm người mới',lambda:self.save_roster(False)),('Sửa người đang chọn',lambda:self.save_roster(True)),('Chọn để bắn',self.choose_shooter),('Nhập danh sách CSV',self.import_shooters),('Tải CSV mẫu',self.save_roster_template)]:self.button(bar,label,cmd).pack(side='left',padx=3)
-        ttk.Label(self.roster_tab,text='Mã người bắn là duy nhất. Sửa danh sách không thay đổi thông tin trên các loạt đã lưu. CSV dùng UTF-8, mở và chỉnh được bằng Excel.',wraplength=1050).pack(anchor='w',padx=10,pady=8)
+        for label,cmd in [('Xem chi tiết',self.open_shooter_detail),('Thêm người mới',lambda:self.open_shooter_detail(new=True)),('Nhập danh sách CSV',self.import_shooters),('Tải CSV mẫu',self.save_roster_template),('Hướng dẫn nhập',self.roster_import_help)]:self.button(bar,label,cmd).pack(side='left',padx=3)
+        ttk.Label(self.roster_tab,text='Nhập CSV UTF-8 (.csv): Mã người bắn, Họ tên, Đơn vị. Chưa hỗ trợ nhập trực tiếp .xlsx / .xls.',wraplength=800).pack(anchor='w',padx=10,pady=4)
+        ttk.Label(self.roster_tab,text='Nhấp đúp một người để xem chi tiết và chọn cho loạt bắn.',wraplength=800).pack(anchor='w',padx=10,pady=8)
         self.refresh_history();self.refresh_roster()
+
+    def open_roster(self):
+        self.refresh_roster();self.roster_window.deiconify();center_window(self.roster_window,self);self.roster_window.lift()
+    def open_shooter_detail(self,new=False):
+        if not new and len(self.roster_table.selection())!=1:raise ValueError('Chọn một người để xem chi tiết')
+        if self.roster_detail and self.roster_detail.winfo_exists():self.roster_detail.destroy()
+        if new:
+            for value in self.roster_fields.values():value.set('')
+        else:self.roster_selected()
+        window=tk.Toplevel(self.roster_window);self.roster_detail=window;window.title('Thông tin người bắn');window.geometry('440x260');window.transient(self.roster_window)
+        form=ttk.Frame(window,padding=18);form.pack(fill='both',expand=True);form.columnconfigure(1,weight=1)
+        for row,(key,label) in enumerate([('code','Mã người bắn'),('name','Họ tên'),('unit','Đơn vị')]):
+            ttk.Label(form,text=label).grid(row=row,column=0,sticky='w',padx=(0,12),pady=7)
+            ttk.Entry(form,textvariable=self.roster_fields[key],state='normal' if new or key!='code' else 'readonly').grid(row=row,column=1,sticky='ew',pady=7)
+        def save():
+            self.save_roster(not new)
+            self.roster_table.selection_set(self.roster_fields['code'].get().strip())
+            window.destroy()
+        self.button(form,'Lưu thông tin',save).grid(row=3,column=0,pady=16)
+        if not new:self.button(form,'Chọn để bắn',self.choose_shooter).grid(row=3,column=1,sticky='e',pady=16)
+        center_window(window,self.roster_window);window.grab_set()
 
     def refresh_history(self):
         self.history_rows=self.store.list_rounds(**{k:v.get().strip() for k,v in self.filters.items()})
@@ -91,7 +114,7 @@ class Management:
         keys=['shooter_code','shooter','unit','lane','series','shooting_date','expected_shots','notes','before_acquired_at','after_acquired_at','capture_sources','demo','reviewed_at','_template_sha256']
         self.meta={k:copy.deepcopy(p[k]) for k in keys if k in p};self.meta.setdefault('shooting_date',shooting_day(p))
         self.before_image=images['before'];self.after_image=images['after'];self.refresh()
-        for i,n in enumerate(('before','after')):self.show(self.views[i],images[n])
+        self.refresh_images()
         if self.cap:self.cap.release();self.cap=None;self.frame=None
         self.notebook.select(0);self.status.set(f"Đã mở loạt {p.get('series')} / bệ {p.get('lane')} • phiên bản {p.get('revision',1)}. Sửa sẽ lưu thành phiên bản tiếp theo.")
 
@@ -132,12 +155,27 @@ class Management:
         if not self.reset(new_shooter=True):return
         for key,value in zip(('shooter_code','shooter','unit'),values):self.vars[key].set(value)
         self.notebook.select(0)
+        if self.roster_detail and self.roster_detail.winfo_exists():self.roster_detail.destroy()
+        self.roster_window.withdraw()
     def import_shooters(self):
-        path=filedialog.askopenfilename(filetypes=[('CSV UTF-8','*.csv')])
+        path=filedialog.askopenfilename(parent=self.roster_window,title='Chọn danh sách CSV UTF-8 — Mã người bắn, Họ tên, Đơn vị',filetypes=[('CSV UTF-8','*.csv')])
         if path:
             count=self.store.save_shooters(import_roster(path));self.refresh_roster();self.status.set(f'Đã nhập {count} người bắn. Không thay đổi thông tin của mã đã có khác nội dung.')
+    def roster_import_help(self):
+        window=tk.Toplevel(self.roster_window);window.title('Hướng dẫn nhập danh sách');window.transient(self.roster_window)
+        body=ttk.Frame(window,padding=18);body.pack(fill='both',expand=True)
+        ttk.Label(body,text='Dùng file CSV UTF-8 (.csv)',font=('Segoe UI',12,'bold')).pack(anchor='w')
+        ttk.Label(body,text='1. Bấm Tải CSV mẫu, mở file bằng Excel.\n2. Điền mỗi người một dòng, đủ mã, họ tên và đơn vị.\n3. Trong Excel, chọn Save As → CSV UTF-8 (Comma delimited) (*.csv).\n4. Bấm Nhập danh sách CSV và chọn file vừa lưu.',wraplength=620,justify='left').pack(anchor='w',pady=10)
+        sample=ttk.Treeview(body,columns=('code','name','unit'),show='headings',height=2)
+        for key,title,width in [('code','Mã người bắn',140),('name','Họ tên',220),('unit','Đơn vị',180)]:sample.heading(key,text=title);sample.column(key,width=width)
+        sample.insert('','end',values=('S01','Nguyễn Văn An','Đơn vị A'));sample.insert('','end',values=('S02','Trần Văn Bình','Đơn vị B'));sample.pack(fill='x',pady=6)
+        ttk.Label(body,text='Chấp nhận tiêu đề tiếng Việt như trên hoặc code, name, unit.\nMã người bắn phải duy nhất; nên dùng S01, S02… để giữ số 0 đầu.\nKhông gộp ô, không đặt tiêu đề phụ trên dòng tên cột.\nMã trùng nhưng khác thông tin sẽ báo lỗi, không tự ghi đè.\nFile Excel .xlsx / .xls cần lưu thành CSV UTF-8 trước khi nhập.',wraplength=620,justify='left').pack(anchor='w',pady=10)
+        actions=ttk.Frame(body);actions.pack(fill='x')
+        self.button(actions,'Tải CSV mẫu',self.save_roster_template).pack(side='left',padx=3)
+        self.button(actions,'Chọn file CSV để nhập',self.import_shooters).pack(side='left',padx=3)
+        ttk.Button(actions,text='Đóng',command=window.destroy).pack(side='right');center_window(window,self.roster_window)
     def save_roster_template(self):
-        path=filedialog.asksaveasfilename(defaultextension='.csv',initialfile='Danh_sach_nguoi_ban.csv',filetypes=[('CSV UTF-8','*.csv')])
+        path=filedialog.asksaveasfilename(parent=self.roster_window,defaultextension='.csv',initialfile='Danh_sach_nguoi_ban.csv',filetypes=[('CSV UTF-8','*.csv')])
         if path:roster_template(path);self.status.set('Đã tạo mẫu CSV: '+path)
 
     def offer_recovery(self):
@@ -169,3 +207,4 @@ class Management:
         bar=ttk.Frame(window);bar.pack(fill='x',padx=8,pady=8)
         self.button(bar,'Khôi phục loạt đã chọn',restore).pack(side='left',padx=4);self.button(bar,'Ẩn nháp (giữ ảnh trên đĩa)',archive).pack(side='left',padx=4)
         tree.bind('<Double-1>',lambda e:self.guard(restore))
+        center_window(window,self)
