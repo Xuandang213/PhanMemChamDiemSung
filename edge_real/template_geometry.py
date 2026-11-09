@@ -10,6 +10,7 @@ from scipy.signal import find_peaks
 from scipy.optimize import least_squares
 from core import sha,validate_config,read_image
 from storage import atomic_json
+from score_map import attach_map,get_map
 VERSION='bia4-auto-2.0'
 
 
@@ -92,6 +93,13 @@ def load_or_extract(template_path,config_path):
         try:
             c=json.loads(config_path.read_text(encoding='utf8'));validate_config(c)
             if c.get('template_sha256')==digest and (c.get('algorithm')==VERSION or c.get('geometry_method')=='manual'):
-                return c
+                c=attach_map(c,template_path);atomic_json(config_path,c);return c
         except (ValueError,KeyError,TypeError):pass
-    c=extract_geometry(read_image(template_path));c['template_sha256']=digest;atomic_json(config_path,c);return c
+    image=read_image(template_path)
+    c={'algorithm':VERSION,'image_size':list(image.shape[1::-1]),'template_sha256':digest,'geometry_method':'score_map_pixels'}
+    attach_map(c,template_path);labels=get_map(c)
+    center=np.argwhere(labels==10).mean(axis=0)[::-1]
+    contours,_=cv2.findContours((labels>0).astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    c['outline']=max(contours,key=cv2.contourArea).reshape(-1,2).tolist();c['center']=center.tolist()
+    c['radii']={str(s):float(np.linalg.norm(np.argwhere(labels>=s)[:,::-1]-center,axis=1).max()) for s in range(10,5,-1)}
+    validate_config(c);atomic_json(config_path,c);return c

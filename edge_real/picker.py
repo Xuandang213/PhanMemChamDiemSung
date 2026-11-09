@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk,messagebox
 import cv2
 from image_viewer import ZoomCanvas
+from window_layout import center_window
 
 class Picker(tk.Toplevel):
     def __init__(self,parent,image,title,minimum=1,maximum=None,preview=None):
@@ -11,7 +12,7 @@ class Picker(tk.Toplevel):
         self.zoom=ZoomCanvas(self,self.click);self.zoom.pack(fill='both',expand=True)
         bar=ttk.Frame(self);bar.pack(fill='x')
         for label,cmd in [('Bỏ điểm cuối',self.undo),('Vừa khung',self.zoom.fit),('Xác nhận',self.done)]:ttk.Button(bar,text=label,command=cmd).pack(side='left',padx=8,pady=6)
-        self.draw();self.grab_set();self.wait_window()
+        self.draw();center_window(self,parent);self.zoom.fit();self.grab_set();self.wait_window()
     def draw(self):
         im=self.im.copy()
         for i,p in enumerate(self.points):

@@ -1,5 +1,21 @@
 # Chấm điểm tự động từ hai ảnh — v2
 
+## Chấm điểm theo bản đồ pixel
+
+Các loạt mới dùng `Image_Scored/Score.png`, ảnh xám 8-bit cùng kích thước và hệ tọa độ với `assets/Biaso4.png` (hiện là 900×900). Pixel 0 là ngoài vùng điểm; pixel 5, 6, 7, 8, 9, 10 chính là điểm. Không tăng sáng ảnh nguồn, không nội suy hay suy điểm bằng bán kính. Nhân độ sáng chỉ dùng để xem ảnh.
+
+Sau khi căn ảnh và nhận diện, lấy tâm lỗ trong tọa độ mẫu, làm tròn về pixel gần nhất (0.5 làm tròn lên) rồi đọc điểm tại `[y, x]`. Tâm ngoài ảnh được 0 điểm. Pixel ở ranh giới lấy đúng nhãn của ảnh, không tự nâng điểm. Đường vùng điểm hiển thị và cảnh báo sát ranh giới cũng dùng bản đồ này.
+
+Ứng dụng tự kiểm tra định dạng, kích thước và nhãn của `Score.png`, không hỏi xác nhận đường bao khi mở. Bản đồ PNG và SHA-256 được lưu trong cấu hình của từng kết quả/nháp và gửi lên server; lịch sử cũ giữ thuật toán cũ. Cần cập nhật mã server cùng phiên bản ứng dụng để xác thực điểm theo bản đồ. Phần mô tả khớp vòng phía dưới áp dụng cho kết quả cũ; điểm của loạt mới lấy từ pixel.
+
+Giao diện Loạt bắn có cột thông tin và điều khiển bên trái, hai ảnh trước/sau bên phải. Ảnh trước nhận diện và khoanh đỏ lỗ cũ (`C1`, `C2`…); ảnh sau khoanh đỏ lỗ cũ đã ghép và xanh lỗ mới (`M1`, `M2`…). Nhãn khớp bảng độ tin cậy phía dưới, không biểu thị thứ tự phát bắn. Bấm ảnh để mở cửa sổ lớn, cuộn để phóng to, kéo để di chuyển, bấm lỗ để chọn dòng tương ứng. Nếu lỗ cũ không thấy lại ở ảnh sau, nó vẫn hiện trên ảnh trước và có cảnh báo.
+
+Bấm **Tìm / chọn người bắn** để mở danh sách có ô tìm mã/tên/đơn vị và nhập CSV. Nhấp đúp một người hoặc bấm **Xem chi tiết**, rồi **Chọn để bắn** để điền thông tin. Danh sách và cửa sổ chi tiết chỉ hiện khi được mở.
+
+**Sửa lỗ trên ảnh sau:** bấm ảnh sau để mở cửa sổ phóng to. Kéo chuột trái từ tâm ra mép ở vùng trống để vẽ vòng mới; giữ chuột phải trên vòng có sẵn và kéo để dời vị trí, giữ nguyên bán kính và loại lỗ. Thả chuột để lưu và tính lại điểm. Bấm lỗ để mở hộp thoại **Xóa điểm này / Vẽ lại vòng tròn**, hoặc chọn **Đỏ — Lỗ cũ** (không cộng điểm) / **Xanh — Lỗ mới** (cộng điểm vùng). Sau khi thêm, xóa hoặc đổi loại, các lỗ còn hiển thị được đánh lại số C1, C2… / M1, M2…; ảnh và bảng dùng cùng số. Đây là số đối chiếu, không phải thứ tự phát bắn. Cuộn để zoom, kéo chuột phải ở vùng trống để di chuyển ảnh, Escape để hủy vòng đang kéo. Thả chuột phải sau khi dời vòng sẽ tự tính lại điểm, tổng và bảng kết quả. Điểm tính tại tâm sau khi chuyển tọa độ qua homography; bán kính chỉ dùng để hiển thị. Kết quả sửa được lưu phiên bản mới. Các cửa sổ và hộp thoại mở ở giữa cửa sổ cha, giới hạn trong màn hình.
+
+Kiểm thử bản đồ: `.venv\Scripts\python.exe -m unittest discover -s edge_real -p test_score_map.py -v`.
+
 ## Bổ sung quản lý và tra cứu
 
 Giữ nguyên thuật toán nhận diện/chấm điểm. Bản này bổ sung đủ 5 nhóm chức năng:
@@ -40,7 +56,7 @@ Máy Windows 64-bit, CPU, camera USB. Đã kèm model `best.pt` và hai ảnh b�
 1. Giải nén **toàn bộ** thư mục `shooting_scoring_auto_v2`, không chạy trong ZIP.
 2. Chạy `setup_windows.bat` một lần, có Internet. Nếu máy đã có Python Install Manager, script thử cài Python 3.12 khi thiếu. Nếu không có `py`, cài Python 3.12 64-bit từ python.org, gồm Launcher và Tcl/Tk, rồi chạy lại script.
 3. Chạy `start_edge.bat` để chụp ảnh và chấm điểm tại máy. **Không cần khởi động Server nếu chỉ dùng cục bộ.**
-4. Lần đầu mở, ứng dụng tự tìm đường bao hình người, tâm và các vòng. Xem hình có đường bao xanh/vòng vàng rồi xác nhận **một lần**. Không phải bấm từng điểm. Những lần sau dùng lại cấu hình đã lưu.
+4. Ứng dụng tự nạp `Image_Scored/Score.png`, không cần xác nhận đường bao. Bấm **Tìm / chọn người bắn** hoặc nhập thông tin ở cột trái.
 5. Có thể bấm **Thử hai ảnh đã gửi** để chạy toàn bộ luồng ngay. Các bản ghi này được đánh dấu **DEMO**, không phải kết quả thực tế.
 
 Nếu vẫn lỗi cài Python, mở CMD chạy `py install 3.12`, rồi chạy lại setup. Nếu launcher cũ không hiểu lệnh `install`, dùng trình cài Python 3.12 64-bit. Giữ cửa sổ lỗi hoặc chụp thông báo nếu có lỗi thư viện.
